@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import { toast } from "sonner";
 import Link from "next/link";
 
 interface BrandConfig {
@@ -33,6 +34,19 @@ interface CMSConfig {
   siteUrl: string;
   username: string;
   apiKey: string;
+}
+
+interface GeneratedArticle {
+  title: string;
+  content: string;
+  excerpt: string;
+  score: number;
+  approvals: {
+    brandVoice: { passed: boolean; score: number };
+    factCheck: { passed: boolean; score: number };
+    seo: { passed: boolean; score: number };
+  };
+  published?: { id: number; link: string };
 }
 
 export default function Dashboard() {
@@ -59,21 +73,153 @@ export default function Dashboard() {
   });
 
   const [generating, setGenerating] = useState(false);
-  const [articles, setArticles] = useState<Array<{
-    title: string;
-    status: string;
-    score: number;
-  }>>([]);
+  const [testing, setTesting] = useState(false);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [articles, setArticles] = useState<GeneratedArticle[]>([]);
+  const [articleCount, setArticleCount] = useState("3");
+  const [publishMode, setPublishMode] = useState("draft");
+  const [topic, setTopic] = useState("");
+
+  const [configStatus, setConfigStatus] = useState({
+    brand: false,
+    sources: false,
+    cms: false,
+  });
+
+  // Load saved configurations on mount
+  useEffect(() => {
+    const loadConfigs = async () => {
+      try {
+        const [brandRes, sourcesRes, cmsRes] = await Promise.all([
+          fetch("/api/brand"),
+          fetch("/api/sources"),
+          fetch("/api/cms"),
+        ]);
+        
+        if (brandRes.ok) {
+          const data = await brandRes.json();
+          setBrand(data);
+          setConfigStatus(prev => ({ ...prev, brand: !!data.name }));
+        }
+        if (sourcesRes.ok) {
+          const data = await sourcesRes.json();
+          setSources(data);
+          setConfigStatus(prev => ({ ...prev, sources: true }));
+        }
+        if (cmsRes.ok) {
+          const data = await cmsRes.json();
+          setCMS(data);
+          setConfigStatus(prev => ({ ...prev, cms: !!data.siteUrl }));
+        }
+      } catch (error) {
+        console.error("Failed to load configs:", error);
+      }
+    };
+    loadConfigs();
+  }, []);
+
+  const saveBrand = async () => {
+    setSaving("brand");
+    try {
+      const res = await fetch("/api/brand", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(brand),
+      });
+      if (res.ok) {
+        toast.success("Brand configuration saved");
+        setConfigStatus(prev => ({ ...prev, brand: true }));
+      }
+    } catch {
+      toast.error("Failed to save brand configuration");
+    }
+    setSaving(null);
+  };
+
+  const saveSources = async () => {
+    setSaving("sources");
+    try {
+      const res = await fetch("/api/sources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(sources),
+      });
+      if (res.ok) {
+        toast.success("Sources configuration saved");
+        setConfigStatus(prev => ({ ...prev, sources: true }));
+      }
+    } catch {
+      toast.error("Failed to save sources configuration");
+    }
+    setSaving(null);
+  };
+
+  const saveCMS = async () => {
+    setSaving("cms");
+    try {
+      const res = await fetch("/api/cms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cms),
+      });
+      if (res.ok) {
+        toast.success("CMS configuration saved");
+        setConfigStatus(prev => ({ ...prev, cms: true }));
+      }
+    } catch {
+      toast.error("Failed to save CMS configuration");
+    }
+    setSaving(null);
+  };
+
+  const testCMS = async () => {
+    setTesting(true);
+    try {
+      const res = await fetch("/api/cms/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cms),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(data.message);
+      } else {
+        toast.error(data.message);
+      }
+    } catch {
+      toast.error("Connection test failed");
+    }
+    setTesting(false);
+  };
 
   const handleGenerate = async () => {
     setGenerating(true);
-    // Simulate generation
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    setArticles([
-      { title: "Understanding Market Trends in 2026", status: "approved", score: 94 },
-      { title: "5 Tips for First-Time Clients", status: "approved", score: 91 },
-      { title: "Industry Best Practices Guide", status: "approved", score: 89 },
-    ]);
+    setArticles([]);
+    
+    try {
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          count: parseInt(articleCount),
+          publishMode,
+          topic: topic || undefined,
+        }),
+      });
+      
+      const data = await res.json();
+      
+      if (data.success) {
+        setArticles(data.articles);
+        toast.success(`Generated ${data.count} articles`);
+      } else {
+        toast.error(data.error || "Generation failed");
+      }
+    } catch (error) {
+      toast.error("Failed to generate articles");
+      console.error(error);
+    }
+    
     setGenerating(false);
   };
 
@@ -102,13 +248,16 @@ export default function Dashboard() {
 
         <Tabs defaultValue="brand" className="space-y-6">
           <TabsList className="bg-slate-900 border border-slate-800">
-            <TabsTrigger value="brand" className="data-[state=active]:bg-slate-800">
+            <TabsTrigger value="brand" className="data-[state=active]:bg-slate-800 gap-2">
+              {configStatus.brand && <span className="w-2 h-2 rounded-full bg-emerald-500" />}
               1. Brand
             </TabsTrigger>
-            <TabsTrigger value="sources" className="data-[state=active]:bg-slate-800">
+            <TabsTrigger value="sources" className="data-[state=active]:bg-slate-800 gap-2">
+              {configStatus.sources && <span className="w-2 h-2 rounded-full bg-emerald-500" />}
               2. Sources
             </TabsTrigger>
-            <TabsTrigger value="cms" className="data-[state=active]:bg-slate-800">
+            <TabsTrigger value="cms" className="data-[state=active]:bg-slate-800 gap-2">
+              {configStatus.cms && <span className="w-2 h-2 rounded-full bg-emerald-500" />}
               3. CMS
             </TabsTrigger>
             <TabsTrigger value="generate" className="data-[state=active]:bg-slate-800">
@@ -175,11 +324,11 @@ export default function Dashboard() {
                         <SelectValue placeholder="Select tone" />
                       </SelectTrigger>
                       <SelectContent className="bg-slate-800 border-slate-700">
-                        <SelectItem value="professional">Professional & Formal</SelectItem>
+                        <SelectItem value="professional">Professional and Formal</SelectItem>
                         <SelectItem value="approachable">Professional but Approachable</SelectItem>
-                        <SelectItem value="casual">Casual & Friendly</SelectItem>
-                        <SelectItem value="authoritative">Authoritative & Expert</SelectItem>
-                        <SelectItem value="inspirational">Inspirational & Motivating</SelectItem>
+                        <SelectItem value="casual">Casual and Friendly</SelectItem>
+                        <SelectItem value="authoritative">Authoritative and Expert</SelectItem>
+                        <SelectItem value="inspirational">Inspirational and Motivating</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -197,7 +346,7 @@ export default function Dashboard() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="keywords" className="text-slate-300">Keywords & Topics</Label>
+                  <Label htmlFor="keywords" className="text-slate-300">Keywords and Topics</Label>
                   <Textarea
                     id="keywords"
                     placeholder="Enter keywords separated by commas (e.g., mortgage rates, home financing, pre-approval, refinance...)"
@@ -219,8 +368,12 @@ export default function Dashboard() {
                 </div>
 
                 <div className="flex justify-end">
-                  <Button className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700">
-                    Save Brand Config
+                  <Button 
+                    onClick={saveBrand}
+                    disabled={saving === "brand"}
+                    className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700"
+                  >
+                    {saving === "brand" ? "Saving..." : "Save Brand Config"}
                   </Button>
                 </div>
               </CardContent>
@@ -269,7 +422,7 @@ https://consumerfinance.gov`}
                 <div className="p-4 bg-indigo-500/10 rounded-lg border border-indigo-500/20">
                   <h4 className="font-medium text-indigo-300 mb-2">Pre-loaded Industry Sources</h4>
                   <p className="text-sm text-slate-400 mb-3">
-                    Based on your industry selection, we&apos;ll automatically include these trusted sources:
+                    Based on your industry selection, we automatically include these trusted sources:
                   </p>
                   <div className="flex flex-wrap gap-2">
                     {["Freddie Mac", "Fannie Mae", "MBA", "NAR", "CFPB", "HUD", "Federal Reserve"].map((source) => (
@@ -281,8 +434,12 @@ https://consumerfinance.gov`}
                 </div>
 
                 <div className="flex justify-end">
-                  <Button className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700">
-                    Save Sources
+                  <Button 
+                    onClick={saveSources}
+                    disabled={saving === "sources"}
+                    className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700"
+                  >
+                    {saving === "sources" ? "Saving..." : "Save Sources"}
                   </Button>
                 </div>
               </CardContent>
@@ -378,11 +535,20 @@ https://consumerfinance.gov`}
                 )}
 
                 <div className="flex justify-between">
-                  <Button variant="outline" className="border-slate-700 text-slate-300 hover:bg-slate-800">
-                    Test Connection
+                  <Button 
+                    variant="outline" 
+                    onClick={testCMS}
+                    disabled={testing || !cms.siteUrl}
+                    className="border-slate-700 text-slate-300 hover:bg-slate-800"
+                  >
+                    {testing ? "Testing..." : "Test Connection"}
                   </Button>
-                  <Button className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700">
-                    Save Connection
+                  <Button 
+                    onClick={saveCMS}
+                    disabled={saving === "cms"}
+                    className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700"
+                  >
+                    {saving === "cms" ? "Saving..." : "Save Connection"}
                   </Button>
                 </div>
               </CardContent>
@@ -403,7 +569,7 @@ https://consumerfinance.gov`}
                   <div className="grid md:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label className="text-slate-300">Number of Articles</Label>
-                      <Select defaultValue="3">
+                      <Select value={articleCount} onValueChange={setArticleCount}>
                         <SelectTrigger className="bg-slate-800 border-slate-700 text-white">
                           <SelectValue />
                         </SelectTrigger>
@@ -417,7 +583,7 @@ https://consumerfinance.gov`}
                     </div>
                     <div className="space-y-2">
                       <Label className="text-slate-300">Publish Mode</Label>
-                      <Select defaultValue="draft">
+                      <Select value={publishMode} onValueChange={setPublishMode}>
                         <SelectTrigger className="bg-slate-800 border-slate-700 text-white">
                           <SelectValue />
                         </SelectTrigger>
@@ -433,6 +599,8 @@ https://consumerfinance.gov`}
                     <Label className="text-slate-300">Topic Focus (Optional)</Label>
                     <Textarea
                       placeholder="Leave blank for AI to choose trending topics, or specify a focus area..."
+                      value={topic}
+                      onChange={(e) => setTopic(e.target.value)}
                       className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500"
                     />
                   </div>
@@ -448,7 +616,7 @@ https://consumerfinance.gov`}
                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                         </svg>
-                        Generating & Approving...
+                        Generating and Approving...
                       </span>
                     ) : (
                       "Generate Articles"
@@ -464,36 +632,48 @@ https://consumerfinance.gov`}
                 <CardContent>
                   <div className="space-y-4">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center">
-                        <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${configStatus.brand ? "bg-emerald-500/20" : "bg-slate-800"}`}>
+                        {configStatus.brand ? (
+                          <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        ) : (
+                          <span className="text-slate-500 text-xs">1</span>
+                        )}
                       </div>
                       <div>
                         <p className="text-sm font-medium text-white">Brand Config</p>
-                        <p className="text-xs text-slate-500">Configured</p>
+                        <p className="text-xs text-slate-500">{configStatus.brand ? "Configured" : "Not configured"}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center">
-                        <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${configStatus.sources ? "bg-emerald-500/20" : "bg-slate-800"}`}>
+                        {configStatus.sources ? (
+                          <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        ) : (
+                          <span className="text-slate-500 text-xs">2</span>
+                        )}
                       </div>
                       <div>
                         <p className="text-sm font-medium text-white">Sources</p>
-                        <p className="text-xs text-slate-500">7 trusted sources</p>
+                        <p className="text-xs text-slate-500">{configStatus.sources ? "AI + Custom sources" : "Not configured"}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center">
-                        <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${configStatus.cms ? "bg-emerald-500/20" : "bg-slate-800"}`}>
+                        {configStatus.cms ? (
+                          <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        ) : (
+                          <span className="text-slate-500 text-xs">3</span>
+                        )}
                       </div>
                       <div>
                         <p className="text-sm font-medium text-white">CMS</p>
-                        <p className="text-xs text-slate-500">WordPress connected</p>
+                        <p className="text-xs text-slate-500">{configStatus.cms ? "Connected" : "Not connected"}</p>
                       </div>
                     </div>
                   </div>
@@ -514,11 +694,31 @@ https://consumerfinance.gov`}
                           <Badge className="bg-emerald-500/20 text-emerald-400 border-0">
                             {article.score}/100
                           </Badge>
-                          <span className="text-white">{article.title}</span>
+                          <div>
+                            <span className="text-white block">{article.title}</span>
+                            {article.published && (
+                              <a 
+                                href={article.published.link} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="text-xs text-indigo-400 hover:underline"
+                              >
+                                View on WordPress (ID: {article.published.id})
+                              </a>
+                            )}
+                          </div>
                         </div>
-                        <Badge variant="outline" className="border-emerald-500/30 text-emerald-400">
-                          Approved
-                        </Badge>
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="border-indigo-500/30 text-indigo-400 text-xs">
+                            Voice: {article.approvals.brandVoice.score}
+                          </Badge>
+                          <Badge variant="outline" className="border-purple-500/30 text-purple-400 text-xs">
+                            Facts: {article.approvals.factCheck.score}
+                          </Badge>
+                          <Badge variant="outline" className="border-emerald-500/30 text-emerald-400 text-xs">
+                            SEO: {article.approvals.seo.score}
+                          </Badge>
+                        </div>
                       </div>
                     ))}
                   </div>
